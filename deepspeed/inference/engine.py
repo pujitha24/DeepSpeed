@@ -71,7 +71,8 @@ class InferenceEngine(Module):
         if hasattr(self.module, "config"):
             TransformerPolicy.hf_model_config = self.module.config
 
-        if config.dtype not in get_accelerator().supported_dtypes():
+        # int8 is DeepSpeed's own weight-quantization dtype, not a native accelerator compute dtype
+        if config.dtype != torch.int8 and config.dtype not in get_accelerator().supported_dtypes():
             raise ValueError(
                 f"Data type {config.dtype} is not supported by {get_accelerator().device_name()} accelerator")
 

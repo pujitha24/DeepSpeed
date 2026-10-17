@@ -22,6 +22,14 @@ def test_max_out_tokens_must_be_positive(field, value):
 
 
 @pytest.mark.inference
+def test_init_inference_accepts_int8_dtype():
+    # int8 is DeepSpeed's weight-quantization dtype and is never in an accelerator's supported_dtypes()
+    # Regression test for https://github.com/deepspeedai/DeepSpeed/issues/8577
+    engine = deepspeed.init_inference(torch.nn.Linear(4, 4), dtype=torch.int8)
+    assert engine._config.dtype == torch.int8
+
+
+@pytest.mark.inference
 @pytest.mark.skipif(not get_accelerator().is_available(), reason="requires accelerator")
 class TestInferenceCudaGraphConfig:
 
