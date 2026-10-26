@@ -921,14 +921,24 @@ def get_global_norm_of_tensors(input_tensors, norm_type=2, mpu=None, moe_ep_grou
         Total norm of the tensors (viewed as a single vector), as a detached float32 scalar tensor.
     """
     assert isinstance(input_tensors, Iterable), f'expected Iterable type not {type(input_tensors)}'
+    input_tensors = list(input_tensors)
     assert all([torch.is_tensor(t) for t in input_tensors]), 'expected list of only tensors'
 
     norm_type = float(norm_type)
     all_norms = []
+    # A rank may have no local contribution but must still join the collectives below. Zero is the
+    # identity for both the sum of powers and the max of absolute values.
+    if len(input_tensors) > 0:
+        output_device = input_tensors[0].device
+    else:
+        output_device = torch.device(get_accelerator().current_device_name())
     if norm_type == inf:
         for t in input_tensors:
             all_norms.append(t.data.abs().max().float())
-        total_norm = torch.stack(all_norms).max()
+        if len(all_norms) > 0:
+            total_norm = torch.stack(all_norms).max()
+        else:
+            total_norm = torch.zeros((), dtype=torch.float32)
         device_total_norm = total_norm.to(get_accelerator().current_device_name())
         # Max across model parallel
         if mpu is not None:
@@ -942,15 +952,18 @@ def get_global_norm_of_tensors(input_tensors, norm_type=2, mpu=None, moe_ep_grou
         # MoE grads: max across expert parallel group
         if pg_utils.is_parallel(moe_ep_group):
             dist.all_reduce(device_total_norm, op=dist.ReduceOp.MAX, group=moe_ep_group)
-        total_norm = device_total_norm.to(input_tensors[0].device)
+        total_norm = device_total_norm.to(output_device)
     else:
 
         device = get_accelerator().current_device_name()
         for tensor in input_tensors:
             tensor_norm = tensor.detach().float().norm(norm_type)
             all_norms.append(tensor_norm.to(device))
-        norm_powers = torch.stack(all_norms).pow(norm_type)
-        device_total_norm = norm_powers.sum()
+        if len(all_norms) > 0:
+            norm_powers = torch.stack(all_norms).pow(norm_type)
+            device_total_norm = norm_powers.sum()
+        else:
+            device_total_norm = torch.zeros((), dtype=torch.float32, device=device)
 
         # Sum across model parallel
         if mpu is not None:
@@ -964,7 +977,7 @@ def get_global_norm_of_tensors(input_tensors, norm_type=2, mpu=None, moe_ep_grou
         # MoE grads: sum across expert parallel group
         if pg_utils.is_parallel(moe_ep_group):
             dist.all_reduce(device_total_norm, op=dist.ReduceOp.SUM, group=moe_ep_group)
-        total_norm = device_total_norm.to(input_tensors[0].device).pow(1. / norm_type)
+        total_norm = device_total_norm.to(output_device).pow(1. / norm_type)
 
     mask_nan_or_inf_with_val_inplace(total_norm, device=total_norm.device)
 

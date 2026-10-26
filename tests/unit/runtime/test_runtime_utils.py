@@ -128,6 +128,29 @@ class TestGlobalNormMoEGroup(DistributedTest):
         assert norm.item() == pytest.approx(expected)
 
 
+class TestGlobalNormEmptyContribution(DistributedTest):
+    world_size = 2
+
+    @pytest.mark.parametrize("norm_type", [2, float("inf")])
+    def test(self, norm_type):
+
+        class MPU:
+
+            def get_model_parallel_group(self):
+                return dist.get_world_group()
+
+        # Rank 1 has no local contribution but must still join the model-parallel collective.
+        if dist.get_rank() == 1:
+            grads = []
+        else:
+            grads = [torch.tensor([3.0, 4.0], device=get_accelerator().device_name())]
+
+        norm = ds_utils.get_global_norm_of_tensors(grads, norm_type=norm_type, mpu=MPU())
+
+        expected = 5.0 if norm_type == 2 else 4.0
+        assert norm.item() == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("check_using_norm", [(False), (True)])
 class TestCheckOverflow(DistributedTest):
     world_size = 2
